@@ -685,14 +685,20 @@
                         <button type="button" onclick="saveClientIdAndConnect()" 
                             class="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition">
                             <i data-lucide="log-in" class="w-4 h-4"></i>
-                            Otorisasi Google
+                            Otorisasi Pop-up
                         </button>
-                        <button type="button" onclick="disconnectGoogleDrive()" 
-                            class="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
-                            <i data-lucide="power-off" class="w-4 h-4"></i>
-                            Putuskan Koneksi
+                        <button type="button" onclick="authorizeViaRedirectFallback()" 
+                            class="py-2.5 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                            <i data-lucide="external-link" class="w-4 h-4"></i>
+                            Login Tab Penuh
                         </button>
                     </div>
+
+                    <button type="button" onclick="disconnectGoogleDrive()" 
+                        class="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                        <i data-lucide="power-off" class="w-4 h-4"></i>
+                        Putuskan Koneksi
+                    </button>
 
                     <div id="oauth-status-box" class="text-[11px] p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700">
                         Status saat ini: <strong>Belum Terhubung</strong> (Database Google Sheets wajib terhubung untuk mencatat kinerja).
@@ -823,6 +829,7 @@
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
             loadPersistedState();
+            handleOAuthRedirectCallback();
             resetCurrentTime();
             updateFolderPreview();
             initSpeechRecognition();
@@ -831,49 +838,73 @@
             setInterval(updateStatusClock, 30000);
         });
 
-        function updateStatusClock() {
-            const now = new Date();
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mm = String(now.getMinutes()).padStart(2, '0');
-            const clockEl = document.getElementById('status-clock');
-            if (clockEl) clockEl.textContent = `${hh}:${mm}`;
+        function isGoogleConnected() {
+            return Boolean(appState.drive.isLive && appState.drive.accessToken && Date.now() < appState.drive.tokenExpiry);
         }
 
-        function loadPersistedState() {
-            try {
-                // Bersihkan sisa cache database lokal lama jika pernah ada
-                localStorage.removeItem('sikinerja_ai_logs_v1');
+        function handleQuickDriveAction() {
+            if (isGoogleConnected()) {
+                switchTab('pengaturan');
+                return;
+            }
+            const cid = (document.getElementById('set-client-id')?.value || appState.drive.clientId || '').trim();
+            if (!cid) {
+                switchTab('pengaturan');
+                showToast('Masukkan Google OAuth 2.0 Client ID terlebih dahulu.', 'info');
+                return;
+            }
+            appState.drive.clientId = cid;
+            saveConfigToLocal();
+            authorizeGoogleDrive();
+        }
 
-                // Tampilkan origin URL aktual agar mudah disalin ke Google Cloud Console
-                const originDisplayEl = document.getElementById('current-origin-display');
-                if (originDisplayEl) {
-                    const currentOrigin = window.location.origin;
-                    originDisplayEl.textContent = (!currentOrigin || currentOrigin === 'null' || window.location.protocol === 'file:')
-                        ? 'PERINGATAN: File dibuka via file:// (Wajib jalankan lewat HTTP/HTTPS server)'
-                        : currentOrigin;
-                }
+        function saveClientIdAndConnect() {
+            const cid = document.getElementById('set-client-id').value.trim();
+            const sid = document.getElementById('set-spreadsheet-id').value.trim();
+            if (!cid) {
+                showToast('Google OAuth 2.0 Client ID tidak boleh kosong!', 'error');
+                return;
+            }
+            appState.drive.clientId = cid;
+            appState.drive.spreadsheetId = sid;
+            saveConfigToLocal();
+            authorizeGoogleDrive();
+        }
 
-                const savedConfig = JSON.parse(localStorage.getItem(STORAGE_KEY_CONFIG));
-                if (savedConfig) {
-                    if (savedConfig.profile) appState.profile = savedConfig.profile;
-                    if (savedConfig.clientId) appState.drive.clientId = savedConfig.clientId;
-                    if (savedConfig.spreadsheetId) appState.drive.spreadsheetId = savedConfig.spreadsheetId;
-                    if (Array.isArray(savedConfig.rencanaAksiList) && savedConfig.rencanaAksiList.length > 0) {
-                        appState.rencanaAksiList = savedConfig.rencanaAksiList;
-                    }
-                }
+        function authorizeViaRedirectFallback() {
+            const cid = document.getElementById('set-client-id').value.trim();
+            if (!cid) {
+                showToast('Masukkan Google OAuth 2.0 Client ID terlebih dahulu.', 'error');
+                return;
+            }
+            if (window.location.protocol === 'file:' || window.location.origin === 'null') {
+                showToast('Tidak dapat login dari protokol file://. Jalankan melalui server HTTP/HTTPS.', 'error');
+                return;
+            }
+            appState.drive.clientId = cid;
+            appState.drive.spreadsheetId = document.getElementById('set-spreadsheet-id').value.trim();
+            saveConfigToLocal();
 
-                document.getElementById('set-nama').value = appState.profile.nama;
-                document.getElementById('set-jabatan').value = appState.profile.jabatan;
-                const defaultCid = '556526035426-t2vnmgcdnhccmcmddggr6mgdhh1j4s0m.apps.googleusercontent.com';
-                if (!appState.drive.clientId) appState.drive.clientId = defaultCid;
-                document.getElementById('set-client-id').value = appState.drive.clientId;
-                document.getElementById('set-spreadsheet-id').value = appState.drive.spreadsheetId || '';
-                updateHeaderProfileUI();
-                renderRencanaAksiOptions();
-                updateDriveConnectionUI(false);
-            } catch (e) {
-                console.error('Gagal memuat konfigurasi:', e);
+            const redirectUri = window.location.origin + window.location.pathname;
+            const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets');
+            const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(cid)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}&include_granted_scopes=true&prompt=consent`;
+
+            window.open(authUrl, '_top');
+        }
+
+        async function handleOAuthRedirectCallback() {
+            if (!window.location.hash || !window.location.hash.includes('access_token=')) return;
+            const params = new URLSearchParams(window.location.hash.substring(1));
+            const token = params.get('access_token');
+            const expiresIn = parseInt(params.get('expires_in') || '3600', 10);
+            if (token) {
+                appState.drive.accessToken = token;
+                appState.drive.tokenExpiry = Date.now() + (expiresIn * 1000);
+                appState.drive.isLive = true;
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+                updateDriveConnectionUI(true);
+                showToast('Berhasil terhubung ke Google Drive & Google Sheets!', 'success');
+                await fetchLogsFromGoogleSheet(true);
             }
         }
 
@@ -963,6 +994,11 @@
             appState.profile.nama = nama;
             appState.profile.jabatan = jabatan || 'Pegawai';
             saveConfigToLocal();
+            updateHeaderProfileUI();
+            refreshWatermarkIfPhotoExists();
+            showToast('Profil pegawai berhasil disimpan!', 'success');
+        }
+
         function copyCurrentOrigin() {
             const origin = window.location.origin;
             if (!origin || origin === 'null' || window.location.protocol === 'file:') {
